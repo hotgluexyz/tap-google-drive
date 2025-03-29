@@ -1,0 +1,50 @@
+version: 2
+send_anonymous_usage_stats: true
+project_id: tap-google-drive
+default_environment: test
+venv:
+  backend: uv
+environments:
+- name: test
+plugins:
+  extractors:
+  - name: tap-google-drive
+    namespace: tap_google_drive
+    pip_url: -e .
+    config:
+      folder_url: "https://drive.google.com/drive/folders/your-folder-id"
+      client_id: ${GOOGLE_DRIVE_CLIENT_ID}
+      client_secret: ${GOOGLE_DRIVE_CLIENT_SECRET}
+      refresh_token: ${GOOGLE_DRIVE_REFRESH_TOKEN}
+    settings:
+      - name: folder_url
+        kind: password
+        env: GOOGLE_DRIVE_FOLDER_URL
+      - name: client_id
+        kind: password
+        env: GOOGLE_DRIVE_CLIENT_ID
+      - name: client_secret
+        kind: password
+        env: GOOGLE_DRIVE_CLIENT_SECRET
+      - name: refresh_token
+        kind: password
+        env: GOOGLE_DRIVE_REFRESH_TOKEN
+    capabilities:
+    - state
+    - catalog
+    - discover
+    - about
+    - stream-maps
+
+    # TODO: Declare required settings here:
+    settings_group_validation:
+    - [folder_url, client_id, client_secret, refresh_token]
+
+    # TODO: Declare default configuration values here:
+    config:
+      start_date: '2010-01-01T00:00:00Z'
+
+  loaders:
+  - name: target-jsonl
+    variant: andyh1203
+    pip_url: target-jsonl
