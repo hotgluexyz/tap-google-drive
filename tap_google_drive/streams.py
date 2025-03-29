@@ -1,182 +1,83 @@
-"""Stream type classes for tap-google-drive."""
+"""Stream definitions for tap-google-drive."""
 
 from __future__ import annotations
 
-import re
-import typing as t
-from typing import ClassVar
+import csv
+import io
+from typing import Any, Dict, Iterable, Optional
 
-import pandas as pd
-from singer_sdk import typing as th  # JSON Schema typing helpers
+from singer_sdk import Stream, Tap
+from singer_sdk.typing import (
+    BooleanType,
+    DateTimeType,
+    IntegerType,
+    NumberType,
+    ObjectType,
+    PropertiesList,
+    Property,
+    StringType,
+)
 
-from tap_google_drive.client import GoogleDriveStream
+from tap_google_drive.client import GoogleDriveClient
 
 
-class CSVFileStream(GoogleDriveStream):
-    """Stream for a specific CSV file in Google Drive."""
+class CSVFileStream(Stream):
+    """Stream for reading CSV files from Google Drive."""
+
+    name = "csv_files"
+    schema = PropertiesList(
+        Property("file_id", StringType, required=True),
+        Property("file_name", StringType, required=True),
+        Property("content", StringType, required=True),
+        Property("last_modified", DateTimeType, required=True),
+    ).to_dict()
 
     def __init__(
         self,
-        tap,
-        file_id: str,
-        file_name: str,
-        schema: dict,
+        tap: Tap,
+        name: Optional[str] = None,
+        schema: Optional[Dict] = None,
+        key_properties: Optional[list[str]] = None,
     ):
         """Initialize the stream.
 
         Args:
-            tap: The tap instance
-            file_id: The Google Drive file ID
-            file_name: The name of the file
-            schema: The schema for this stream
+            tap: The Tap instance.
+            name: The name of the stream.
+            schema: The schema of the stream.
+            key_properties: The key properties of the stream.
         """
-        super().__init__(tap)
-        self.file_id = file_id
-        self.name = file_name.replace(".csv", "").lower()
-        self.schema = schema
-        self.primary_keys: ClassVar[list[str]] = ["id"]
-        self.replication_key = "modifiedTime"
+        super().__init__(tap, name, schema, key_properties)
+        self.client = GoogleDriveClient(tap.config)
 
-    @property
-    def path(self) -> str:
-        """Return the API path for this stream."""
-        return f"/files/{self.file_id}"
-
-    def get_url_params(
-        self,
-        context: t.Optional[dict] = None,
-        next_page_token: t.Optional[str] = None,
-    ) -> dict[str, t.Any]:
-        """Return a dictionary of values to be used in URL parameterization.
-
-        Args:
-            context: The stream context.
-            next_page_token: The next page token.
-
-        Returns:
-            A dictionary of URL query parameters.
-        """
-        params = super().get_url_params(context, next_page_token)
-        params["fields"] = "id, name, modifiedTime"
-        return params
-
-    def _get_file_content(self) -> pd.DataFrame:
-        """Get the content of the CSV file.
-
-        Returns:
-            A pandas DataFrame containing the file content.
-        """
-        response = self._request(
-            context=None,
-            url=f"{self.url_base}/files/{self.file_id}",
-            params={"alt": "media"},
-        )
-        return pd.read_csv(pd.io.common.BytesIO(response.content))
-
-    def get_records(self, context: t.Optional[dict] = None) -> t.Iterable[dict]:
+    def get_records(self, context: Optional[dict] = None) -> Iterable[Dict[str, Any]]:
         """Get records from the stream.
 
         Args:
-            context: The stream context.
+            context: The context for the stream.
 
         Yields:
-            Each record from the source.
+            A dictionary for each record.
         """
-        df = self._get_file_content()
-        
-        # Convert column names to BigQuery format
-        df.columns = [self._convert_to_bigquery_column_name(col) for col in df.columns]
-        
-        # Add metadata columns
-        df["id"] = self.file_id
-        df["modifiedTime"] = self._get_modified_time()
-        
-        # Convert DataFrame to records
-        for _, row in df.iterrows():
-            yield row.to_dict()
+        # Get folder ID from URL
+        folder_id = self.client.get_folder_id_from_url(self.config["folder_url"])
 
-    def _get_modified_time(self) -> str:
-        """Get the last modified time of the file.
+        # List CSV files in the folder
+        files = self.client.list_csv_files(folder_id)
 
-        Returns:
-            The last modified time as an ISO format string.
-        """
-        response = self._request(
-            context=None,
-            url=f"{self.url_base}/files/{self.file_id}",
-            params={"fields": "modifiedTime"},
-        )
-        return response.json()["modifiedTime"]
+        for file in files:
+            # Get file content
+            content = self.client.get_file_content(file["id"])
+            
+            # Get file metadata
+            file_metadata = self.client.service.files().get(
+                fileId=file["id"],
+                fields="modifiedTime"
+            ).execute()
 
-    def _convert_to_bigquery_column_name(self, column_name: str) -> str:
-        """Convert column name to BigQuery compliant format.
-
-        Args:
-            column_name: The original column name.
-
-        Returns:
-            The converted column name.
-        """
-        # Remove special characters and spaces
-        column_name = re.sub(r'[^a-zA-Z0-9_]', '_', column_name)
-        # Ensure it starts with a letter
-        if not column_name[0].isalpha():
-            column_name = 'col_' + column_name
-        # Convert to lowercase
-        column_name = column_name.lower()
-        return column_name
-
-
-def get_csv_streams(tap) -> list[CSVFileStream]:
-    """Get a list of CSV file streams from the configured folder.
-
-    Args:
-        tap: The tap instance.
-
-    Returns:
-        A list of CSVFileStream instances.
-    """
-    # Create a temporary stream to get the service
-    temp_stream = CSVFileStream(tap, "", "", {})
-    service = temp_stream.authenticator.service
-
-    # List all CSV files in the folder
-    folder_id = tap.folder_id
-    results = service.files().list(
-        q=f"'{folder_id}' in parents and mimeType='text/csv'",
-        fields="files(id, name)",
-        spaces='drive'
-    ).execute()
-    
-    files = results.get('files', [])
-    streams = []
-    
-    for file in files:
-        # Read CSV file to get schema
-        file_content = service.files().get_media(fileId=file['id']).execute()
-        df = pd.read_csv(pd.io.common.BytesIO(file_content))
-        
-        # Convert column names to BigQuery format
-        df.columns = [temp_stream._convert_to_bigquery_column_name(col) for col in df.columns]
-        
-        # Create schema from DataFrame
-        schema = {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string"},
-                "modifiedTime": {"type": "string", "format": "date-time"},
-                **{col: {"type": "string"} for col in df.columns}
-            },
-            "required": ["id", "modifiedTime"] + list(df.columns)
-        }
-        
-        # Create stream for this file
-        stream = CSVFileStream(
-            tap=tap,
-            file_id=file['id'],
-            file_name=file['name'],
-            schema=schema
-        )
-        streams.append(stream)
-    
-    return streams
+            yield {
+                "file_id": file["id"],
+                "file_name": file["name"],
+                "content": content,
+                "last_modified": file_metadata["modifiedTime"],
+            }

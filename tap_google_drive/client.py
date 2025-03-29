@@ -6,6 +6,9 @@ import decimal
 import typing as t
 from functools import cached_property
 
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 from singer_sdk.helpers.jsonpath import extract_jsonpath
 from singer_sdk.pagination import BaseAPIPaginator
 from singer_sdk.streams import RESTStream
@@ -15,6 +18,92 @@ from tap_google_drive.auth import GoogleDriveAuth
 if t.TYPE_CHECKING:
     import requests
     from singer_sdk.helpers.types import Auth, Context
+
+
+class GoogleDriveClient:
+    """Client for interacting with Google Drive API."""
+
+    SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+
+    def __init__(self, config: dict):
+        """Initialize the client.
+
+        Args:
+            config: Configuration dictionary containing OAuth credentials.
+        """
+        self.config = config
+        self._credentials = None
+        self._service = None
+
+    @property
+    def credentials(self) -> Credentials:
+        """Get or refresh Google Drive credentials.
+
+        Returns:
+            Credentials object for Google Drive API.
+        """
+        if self._credentials is None:
+            self._credentials = Credentials(
+                token=None,
+                refresh_token=self.config["refresh_token"],
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=self.config["client_id"],
+                client_secret=self.config["client_secret"],
+                scopes=self.SCOPES
+            )
+        return self._credentials
+
+    @property
+    def service(self):
+        """Get or create Google Drive service.
+
+        Returns:
+            Google Drive service object.
+        """
+        if self._service is None:
+            self._service = build("drive", "v3", credentials=self.credentials)
+        return self._service
+
+    def get_folder_id_from_url(self, folder_url: str) -> str:
+        """Extract folder ID from Google Drive URL.
+
+        Args:
+            folder_url: The Google Drive folder URL.
+
+        Returns:
+            The folder ID.
+        """
+        if "folders/" in folder_url:
+            return folder_url.split("folders/")[1].split("?")[0]
+        raise ValueError("Invalid folder URL. Must be a Google Drive folder URL.")
+
+    def list_csv_files(self, folder_id: str) -> list[dict]:
+        """List all CSV files in a folder.
+
+        Args:
+            folder_id: The ID of the folder to list files from.
+
+        Returns:
+            A list of file metadata dictionaries.
+        """
+        results = self.service.files().list(
+            q=f"'{folder_id}' in parents and mimeType='text/csv'",
+            fields="files(id, name)",
+            spaces="drive"
+        ).execute()
+        return results.get("files", [])
+
+    def get_file_content(self, file_id: str) -> str:
+        """Get the content of a file.
+
+        Args:
+            file_id: The ID of the file to get content from.
+
+        Returns:
+            The file content as a string.
+        """
+        response = self.service.files().get_media(fileId=file_id).execute()
+        return response.decode('utf-8')
 
 
 class GoogleDriveStream(RESTStream):
