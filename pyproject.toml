@@ -6,6 +6,9 @@ authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
 packages = [{include = "tap_google_drive"}]
 
+[tool.poetry.scripts]
+tap-google-drive = "tap_google_drive.tap:TapGoogleDrive.cli"
+
 [tool.poetry.dependencies]
 python = "^3.9"
 singer-sdk = "^0.34.0"

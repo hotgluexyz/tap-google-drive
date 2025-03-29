@@ -20,7 +20,6 @@ class TapGoogleDrive(Tap):
             th.StringType,
             required=True,
             secret=True,  # Flag config as protected.
-            title="Client ID",
             description="OAuth2 client ID for Google Drive API",
         ),
         th.Property(
@@ -28,7 +27,6 @@ class TapGoogleDrive(Tap):
             th.StringType,
             required=True,
             secret=True,  # Flag config as protected.
-            title="Client Secret",
             description="OAuth2 client secret for Google Drive API",
         ),
         th.Property(
@@ -36,27 +34,23 @@ class TapGoogleDrive(Tap):
             th.StringType,
             required=True,
             secret=True,  # Flag config as protected.
-            title="Refresh Token",
             description="OAuth2 refresh token for Google Drive API",
         ),
         th.Property(
             "folder_url",
             th.StringType,
             required=True,
-            title="Folder URL",
             description="The URL of the Google Drive folder to sync (e.g., https://drive.google.com/drive/folders/your-folder-id)",
         ),
     ).to_dict()
 
-    def discover_streams(self) -> list[streams.GoogleDriveStream]:
+    def discover_streams(self) -> list[streams.CSVFileStream]:
         """Return a list of discovered streams.
 
         Returns:
             A list of discovered streams.
         """
-        return [
-            streams.GoogleDriveStream(self),
-        ]
+        return streams.get_csv_streams(self)
 
 
 if __name__ == "__main__":
