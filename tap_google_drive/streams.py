@@ -120,21 +120,27 @@ class CSVFileStream(Stream):
         ).execute()
         
         current_modified_time = file_metadata["modifiedTime"]
+        self.logger.info(f"Processing file: {self.file_name}")
+        self.logger.info(f"Current modified time: {current_modified_time}")
         
         # Get the last processed timestamp from state
         start_time = None
-        self.logger.info(f"Current modified time: {current_modified_time}")
+        self.logger.info(f"Context received: {context}")
         start_time = self.get_starting_replication_key_value(context)
-        self.logger.info(f"Start time: {start_time}")
+        self.logger.info(f"Start time from state: {start_time}")
+        
         if start_time and current_modified_time <= start_time:
             self.logger.info(f"Skipping file {self.file_name} - no changes since last run")
             return
+        else:
+            self.logger.info(f"Processing file {self.file_name} - changes detected or no previous state")
 
         # Get file content if it's new or modified
         content = self.client.get_file_content(self.file_id)
         
         # Parse CSV content
         reader = csv.DictReader(io.StringIO(content))
+        record_count = 0
         for row_number, row in enumerate(reader, start=1):
             # Convert column names to BigQuery format
             record = {
@@ -148,4 +154,7 @@ class CSVFileStream(Stream):
                 "_last_modified": current_modified_time,
                 "_row_number": row_number,  # Add row number to uniquely identify each record
             })
+            record_count += 1
             yield record
+            
+        self.logger.info(f"Processed {record_count} records from {self.file_name}")

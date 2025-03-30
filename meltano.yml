@@ -37,7 +37,7 @@ plugins:
 
     # TODO: Declare default configuration values here:
     config:
-      start_date: '2010-01-01T00:00:00Z'
+      start_date: '1970-01-01T00:00:00Z'
 
   loaders:
   - name: target-jsonl
