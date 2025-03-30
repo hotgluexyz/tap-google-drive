@@ -123,13 +123,12 @@ class CSVFileStream(Stream):
         
         # Get the last processed timestamp from state
         start_time = None
-        if context and "state" in context and context["state"].get(self.name, {}).get(self.replication_key):
-            start_time = context["state"][self.name][self.replication_key]
-            
-            # Skip if file hasn't been modified since last run
-            if current_modified_time <= start_time:
-                self.logger.info(f"Skipping file {self.file_name} - no changes since last run")
-                return
+        self.logger.info(f"Current modified time: {current_modified_time}")
+        start_time = self.get_starting_replication_key_value(context)
+        self.logger.info(f"Start time: {start_time}")
+        if start_time and current_modified_time <= start_time:
+            self.logger.info(f"Skipping file {self.file_name} - no changes since last run")
+            return
 
         # Get file content if it's new or modified
         content = self.client.get_file_content(self.file_id)
