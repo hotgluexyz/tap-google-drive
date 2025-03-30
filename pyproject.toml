@@ -8,6 +8,7 @@ packages = [{include = "tap_google_drive"}]
 
 [tool.poetry.scripts]
 tap-google-drive = "tap_google_drive.tap:TapGoogleDrive.cli"
+list-files = "scripts.list_files:main"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -17,6 +18,7 @@ google-auth-httplib2 = "^0.1.0"
 google-api-python-client = "^2.0.0"
 pandas = "^2.0.0"
 python-dotenv = "^1.0.0"
+tabulate = "^0.9.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"
