@@ -1,6 +1,6 @@
 # tap-google-drive
 
-A Meltano tap for syncing CSV files from Google Drive. This tap operates in magic folder mode, where each CSV file in the specified Google Drive folder creates a new table.
+A Meltano tap for Google Drive that reads CSV files from a specified Google Drive folder.
 
 ## Features
 
@@ -25,24 +25,26 @@ poetry install
 
 ## Configuration
 
-Create a `.env` file in the root directory with the following variables:
+The tap requires the following configuration:
 
-```env
-GOOGLE_DRIVE_CLIENT_SECRETS_FILE=path/to/your/client_secrets.json
+1. Configure the tap using Meltano:
+```bash
+meltano config tap-google-drive set client_id <your_oauth_client_id>
+meltano config tap-google-drive set folder_url <your google drive URL>
+meltano config tap-google-drive set client_secret <your client secret>
+meltano config tap-google-drive set refresh_token <your refresh token>
+```
+replace the <> and the values within with your configuration values.
+
+2. Create a `.env` file in the root directory with the following variables:
+```
+TAP_GOOGLE_DRIVE_CLIENT_ID=your_oauth_client_id
+TAP_GOOGLE_DRIVE_CLIENT_SECRET=your_oauth_client_secret
+TAP_GOOGLE_DRIVE_REFRESH_TOKEN=your_oauth_refresh_token
+TAP_GOOGLE_DRIVE_FOLDER_URL=your_google_drive_folder_url
 ```
 
-The `meltano.yml` file should contain:
-
-```yaml
-plugins:
-  extractors:
-    - name: tap-google-drive
-      namespace: tap_google_drive
-      pip_url: tap-google-drive
-      config:
-        folder_id: your_google_drive_folder_id
-        client_secrets_file: ${GOOGLE_DRIVE_CLIENT_SECRETS_FILE}
-```
+Note: The `client_secret` and `refresh_token` are sensitive credentials and should not be stored in the Meltano configuration. They should only be stored in the `.env` file.
 
 ## Authentication
 
@@ -56,17 +58,10 @@ plugins:
 
 ## Usage
 
-1. Configure the tap using Meltano:
+Run the tap:
 ```bash
-meltano elt tap-google-drive target-jsonl
+meltano run tap-google-drive target-jsonl
 ```
-
-2. The tap will:
-   - Authenticate with Google Drive using OAuth2
-   - List all CSV files in the specified folder
-   - Create a new table for each CSV file
-   - Convert column names to BigQuery-compliant format
-   - Stream the data to the target
 
 ## Column Name Conversion
 
@@ -83,10 +78,18 @@ Example:
 
 ## Development
 
-### Running Tests
+### Testing
 
 ```bash
 poetry run pytest
+```
+
+### Linting
+
+```bash
+poetry run black .
+poetry run isort .
+poetry run flake8
 ```
 
 ### Code Style
