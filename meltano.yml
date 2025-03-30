@@ -1,6 +1,6 @@
-version: 2
-send_anonymous_usage_stats: true
+version: 1
 project_id: tap-google-drive
+send_anonymous_usage_stats: true
 default_environment: test
 venv:
   backend: uv
@@ -11,11 +11,6 @@ plugins:
   - name: tap-google-drive
     namespace: tap_google_drive
     pip_url: -e .
-    config:
-      folder_url: "https://drive.google.com/drive/folders/your-folder-id"
-      client_id: ${GOOGLE_DRIVE_CLIENT_ID}
-      client_secret: ${GOOGLE_DRIVE_CLIENT_SECRET}
-      refresh_token: ${GOOGLE_DRIVE_REFRESH_TOKEN}
     settings:
       - name: folder_url
         kind: password

@@ -31,6 +31,7 @@ class CSVFileStream(Stream):
         Property("content", StringType, required=True),
         Property("last_modified", DateTimeType, required=True),
     ).to_dict()
+    key_properties = ["file_id"]
 
     def __init__(
         self,
@@ -47,7 +48,10 @@ class CSVFileStream(Stream):
             schema: The schema of the stream.
             key_properties: The key properties of the stream.
         """
-        super().__init__(tap, name, schema, key_properties)
+        # Initialize parent class
+        super().__init__(tap)
+        
+        # Initialize client after parent class
         self.client = GoogleDriveClient(tap.config)
 
     def get_records(self, context: Optional[dict] = None) -> Iterable[Dict[str, Any]]:
