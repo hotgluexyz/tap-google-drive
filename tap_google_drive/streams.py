@@ -13,6 +13,7 @@ from singer_sdk.typing import (
     PropertiesList,
     Property,
     StringType,
+    IntegerType,
 )
 
 from tap_google_drive.client import GoogleDriveClient
@@ -20,6 +21,11 @@ from tap_google_drive.client import GoogleDriveClient
 
 class CSVFileStream(Stream):
     """Stream for reading CSV files from Google Drive."""
+
+    # Add replication key for state management
+    replication_key = "_last_modified"
+    is_timestamp_replication_key = True
+    primary_keys = ["_file_id", "_row_number"]  # Add row_number to uniquely identify each record
 
     def __init__(
         self,
@@ -70,9 +76,10 @@ class CSVFileStream(Stream):
 
         # Add metadata fields
         properties.update({
-            "file_id": Property("file_id", StringType, required=True),
-            "file_name": Property("file_name", StringType, required=True),
-            "last_modified": Property("last_modified", DateTimeType, required=True),
+            "_file_id": Property("_file_id", StringType, required=True),
+            "_file_name": Property("_file_name", StringType, required=True),
+            "_last_modified": Property("_last_modified", DateTimeType, required=True),
+            "_row_number": Property("_row_number", IntegerType, required=True),  # Add row_number to schema
         })
 
         return PropertiesList(*properties.values()).to_dict()
@@ -106,18 +113,30 @@ class CSVFileStream(Stream):
         Yields:
             A dictionary for each record.
         """
-        # Get file content
-        content = self.client.get_file_content(self.file_id)
-        
-        # Get file metadata
+        # Get file metadata first to check if we need to process
         file_metadata = self.client.service.files().get(
             fileId=self.file_id,
             fields="modifiedTime"
         ).execute()
+        
+        current_modified_time = file_metadata["modifiedTime"]
+        
+        # Get the last processed timestamp from state
+        start_time = None
+        if context and "state" in context and context["state"].get(self.name, {}).get(self.replication_key):
+            start_time = context["state"][self.name][self.replication_key]
+            
+            # Skip if file hasn't been modified since last run
+            if current_modified_time <= start_time:
+                self.logger.info(f"Skipping file {self.file_name} - no changes since last run")
+                return
 
+        # Get file content if it's new or modified
+        content = self.client.get_file_content(self.file_id)
+        
         # Parse CSV content
         reader = csv.DictReader(io.StringIO(content))
-        for row in reader:
+        for row_number, row in enumerate(reader, start=1):
             # Convert column names to BigQuery format
             record = {
                 self._convert_to_bigquery_name(k): v
@@ -125,8 +144,9 @@ class CSVFileStream(Stream):
             }
             # Add metadata
             record.update({
-                "file_id": self.file_id,
-                "file_name": self.file_name,
-                "last_modified": file_metadata["modifiedTime"],
+                "_file_id": self.file_id,
+                "_file_name": self.file_name,
+                "_last_modified": current_modified_time,
+                "_row_number": row_number,  # Add row number to uniquely identify each record
             })
             yield record
