@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from typing import Any, Dict, Iterable, Optional
 
 from singer_sdk import Stream, Tap
 from singer_sdk.typing import (
-    BooleanType,
     DateTimeType,
-    IntegerType,
-    NumberType,
-    ObjectType,
     PropertiesList,
     Property,
     StringType,
@@ -24,35 +21,81 @@ from tap_google_drive.client import GoogleDriveClient
 class CSVFileStream(Stream):
     """Stream for reading CSV files from Google Drive."""
 
-    name = "csv_files"
-    schema = PropertiesList(
-        Property("file_id", StringType, required=True),
-        Property("file_name", StringType, required=True),
-        Property("content", StringType, required=True),
-        Property("last_modified", DateTimeType, required=True),
-    ).to_dict()
-    key_properties = ["file_id"]
-
     def __init__(
         self,
         tap: Tap,
-        name: Optional[str] = None,
-        schema: Optional[Dict] = None,
-        key_properties: Optional[list[str]] = None,
+        file_id: str,
+        file_name: str,
     ):
         """Initialize the stream.
 
         Args:
             tap: The Tap instance.
-            name: The name of the stream.
-            schema: The schema of the stream.
-            key_properties: The key properties of the stream.
+            file_id: The Google Drive file ID.
+            file_name: The file name.
         """
-        # Initialize parent class
-        super().__init__(tap)
+        # Store file info
+        self.file_id = file_id
+        self.file_name = file_name
         
-        # Initialize client after parent class
+        # Initialize client
         self.client = GoogleDriveClient(tap.config)
+        
+        # Get initial schema from CSV headers
+        content = self.client.get_file_content(self.file_id)
+        reader = csv.reader(io.StringIO(content))
+        self._headers = next(reader)  # Get the headers
+        
+        # Convert file name to BigQuery-compliant name
+        name = self._convert_to_bigquery_name(file_name)
+        
+        # Initialize parent class
+        super().__init__(tap, name=name)
+
+    @property
+    def schema(self) -> dict:
+        """Get stream schema.
+
+        Returns:
+            Stream schema.
+        """
+        # Convert headers to BigQuery-compliant names
+        headers = [self._convert_to_bigquery_name(header) for header in self._headers]
+
+        # Create schema properties
+        properties = {
+            header: Property(header, StringType, required=True)
+            for header in headers
+        }
+
+        # Add metadata fields
+        properties.update({
+            "file_id": Property("file_id", StringType, required=True),
+            "file_name": Property("file_name", StringType, required=True),
+            "last_modified": Property("last_modified", DateTimeType, required=True),
+        })
+
+        return PropertiesList(*properties.values()).to_dict()
+
+    @staticmethod
+    def _convert_to_bigquery_name(name: str) -> str:
+        """Convert a name to BigQuery-compliant format.
+
+        Args:
+            name: The original name.
+
+        Returns:
+            The BigQuery-compliant name.
+        """
+        # Remove file extension
+        name = name.replace('.csv', '')
+        # Replace special characters with underscore
+        name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        # Ensure it starts with a letter
+        if not name[0].isalpha():
+            name = 'table_' + name
+        # Convert to lowercase
+        return name.lower()
 
     def get_records(self, context: Optional[dict] = None) -> Iterable[Dict[str, Any]]:
         """Get records from the stream.
@@ -63,25 +106,27 @@ class CSVFileStream(Stream):
         Yields:
             A dictionary for each record.
         """
-        # Get folder ID from URL
-        folder_id = self.client.get_folder_id_from_url(self.config["folder_url"])
+        # Get file content
+        content = self.client.get_file_content(self.file_id)
+        
+        # Get file metadata
+        file_metadata = self.client.service.files().get(
+            fileId=self.file_id,
+            fields="modifiedTime"
+        ).execute()
 
-        # List CSV files in the folder
-        files = self.client.list_csv_files(folder_id)
-
-        for file in files:
-            # Get file content
-            content = self.client.get_file_content(file["id"])
-            
-            # Get file metadata
-            file_metadata = self.client.service.files().get(
-                fileId=file["id"],
-                fields="modifiedTime"
-            ).execute()
-
-            yield {
-                "file_id": file["id"],
-                "file_name": file["name"],
-                "content": content,
-                "last_modified": file_metadata["modifiedTime"],
+        # Parse CSV content
+        reader = csv.DictReader(io.StringIO(content))
+        for row in reader:
+            # Convert column names to BigQuery format
+            record = {
+                self._convert_to_bigquery_name(k): v
+                for k, v in row.items()
             }
+            # Add metadata
+            record.update({
+                "file_id": self.file_id,
+                "file_name": self.file_name,
+                "last_modified": file_metadata["modifiedTime"],
+            })
+            yield record

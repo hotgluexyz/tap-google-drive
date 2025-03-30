@@ -18,6 +18,7 @@ from singer_sdk.typing import (
 )
 
 from tap_google_drive.streams import CSVFileStream
+from tap_google_drive.client import GoogleDriveClient
 
 
 class TapGoogleDrive(Tap):
@@ -58,7 +59,26 @@ class TapGoogleDrive(Tap):
         Returns:
             A list of discovered streams.
         """
-        return [CSVFileStream(tap=self)]
+        # Create a temporary client to list files
+        client = GoogleDriveClient(self.config)
+        
+        # Get folder ID from URL
+        folder_id = client.get_folder_id_from_url(self.config["folder_url"])
+        
+        # List CSV files in the folder
+        files = client.list_csv_files(folder_id)
+        
+        streams = []
+        for file in files:
+            # Create a stream for each CSV file
+            stream = CSVFileStream(
+                tap=self,
+                file_id=file["id"],
+                file_name=file["name"]
+            )
+            streams.append(stream)
+        
+        return streams
 
 
 if __name__ == "__main__":
