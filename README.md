@@ -25,26 +25,19 @@ poetry install
 
 ## Configuration
 
-The tap requires the following configuration:
+Configure the tap using Meltano's interactive configuration:
 
-1. Configure the tap using Meltano:
 ```bash
-meltano config tap-google-drive set client_id <your_oauth_client_id>
-meltano config tap-google-drive set folder_url <your google drive URL>
-meltano config tap-google-drive set client_secret <your client secret>
-meltano config tap-google-drive set refresh_token <your refresh token>
-```
-replace the <> and the values within with your configuration values.
-
-2. Create a `.env` file in the root directory with the following variables:
-```
-TAP_GOOGLE_DRIVE_CLIENT_ID=your_oauth_client_id
-TAP_GOOGLE_DRIVE_CLIENT_SECRET=your_oauth_client_secret
-TAP_GOOGLE_DRIVE_REFRESH_TOKEN=your_oauth_refresh_token
-TAP_GOOGLE_DRIVE_FOLDER_URL=your_google_drive_folder_url
+meltano config tap-google-drive set --interactive
 ```
 
-Note: The `client_secret` and `refresh_token` are sensitive credentials and should not be stored in the Meltano configuration. They should only be stored in the `.env` file.
+This will prompt you for:
+- `client_id`: Your OAuth 2.0 Client ID
+- `client_secret`: Your OAuth 2.0 Client Secret (stored securely)
+- `refresh_token`: Your OAuth 2.0 Refresh Token (stored securely)
+- `folder_url`: The Google Drive folder URL containing your CSV files
+
+Note: Sensitive credentials (`client_secret` and `refresh_token`) are automatically stored securely by Meltano and will not appear in your `meltano.yml` file.
 
 ## Authentication
 
