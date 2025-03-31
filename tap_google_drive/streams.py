@@ -23,9 +23,9 @@ class CSVFileStream(Stream):
     """Stream for reading CSV files from Google Drive."""
 
     # Add replication key for state management
-    replication_key = "_last_modified"
+    replication_key = "_gn_last_modified"
     is_timestamp_replication_key = True
-    primary_keys = ["_file_id", "_row_number"]  # Add row_number to uniquely identify each record
+    primary_keys = ["_gn_file_id", "_gn_row_number"]  # Add row_number to uniquely identify each record
 
     def __init__(
         self,
@@ -76,10 +76,10 @@ class CSVFileStream(Stream):
 
         # Add metadata fields
         properties.update({
-            "_file_id": Property("_file_id", StringType, required=True),
-            "_file_name": Property("_file_name", StringType, required=True),
-            "_last_modified": Property("_last_modified", DateTimeType, required=True),
-            "_row_number": Property("_row_number", IntegerType, required=True),  # Add row_number to schema
+            "_gn_file_id": Property("_gn_file_id", StringType, required=True),
+            "_gn_filename": Property("_gn_filename", StringType, required=True),
+            "_gn_last_modified": Property("_gn_last_modified", DateTimeType, required=True),
+            "_gn_row_number": Property("_gn_row_number", IntegerType, required=True),  # Add row_number to schema
         })
 
         return PropertiesList(*properties.values()).to_dict()
@@ -149,10 +149,10 @@ class CSVFileStream(Stream):
             }
             # Add metadata
             record.update({
-                "_file_id": self.file_id,
-                "_file_name": self.file_name,
-                "_last_modified": current_modified_time,
-                "_row_number": row_number,  # Add row number to uniquely identify each record
+                "_gn_file_id": self.file_id,
+                "_gn_filename": self.file_name,
+                "_gn_last_modified": current_modified_time,
+                "_gn_row_number": row_number,  # Add row number to uniquely identify each record
             })
             record_count += 1
             yield record
