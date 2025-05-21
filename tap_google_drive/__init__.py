@@ -3,21 +3,27 @@ import os
 import json
 import argparse
 import logging
+import csv
+from datetime import datetime
 
 from pathlib import Path
+from io import StringIO
 import hashlib
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload
 
 
 logger = logging.getLogger("tap-google-drive")
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+import io
+
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 
 def unique_list(items, key=None):
     seen = set()
@@ -34,9 +40,6 @@ def download_file(real_file_id, creds, target_path=None):
     """Downloads a file
     Args:
         real_file_id: ID of the file to download
-        creds: Load pre-authorized user credentials
-        TODO(developer) - See https://developers.google.com/identity
-        for guides on implementing OAuth2 for the application.
         target_path: Path to save the file to (including filename)
     Returns : dict of {filename: filepath} for downloaded files
     """
@@ -83,7 +86,7 @@ def download_file_data(service, file_id, target_path=None):
 
 
 def download_file_d(service, file_id, target_path=None):
-    file_metadata = service.files().get(fileId=file_id).execute()
+    file_metadata = service.files().get(fileId=file_id, fields="id,name,mimeType,parents,createdTime,modifiedTime,size").execute()
     file_name = file_metadata["name"]
     
     if target_path:
@@ -107,7 +110,7 @@ def download_file_d(service, file_id, target_path=None):
 
 
 def export_file_d(service, file_id, target_path=None):
-    file_metadata = service.files().get(fileId=file_id).execute()
+    file_metadata = service.files().get(fileId=file_id, fields="id,name,mimeType,parents,createdTime,modifiedTime").execute()
     file_name = file_metadata["name"] + ".pdf"
     
     if target_path:
@@ -222,7 +225,7 @@ def get_files_in_folder(folder_id, creds, parent_path=None):
         response = service.files().list(
             q=f"'{folder_id}' in parents and trashed = false",
             spaces='drive',
-            fields='nextPageToken, files(id, name, mimeType, parents)',
+            fields='nextPageToken, files(id, name, mimeType, parents, createdTime, modifiedTime, size)',
             pageToken=page_token
         ).execute()
         for file in response.get('files', []):
@@ -237,13 +240,52 @@ def get_files_in_folder(folder_id, creds, parent_path=None):
     return files
 
 
+def save_metadata_to_csv(metadata, output_dir):
+    """Save file metadata to a CSV file"""
+    csv_path = Path(output_dir) / "google_drive_metadata.csv"
+    fieldnames = [
+        'id', 'name', 'mimeType', 'parent_id', 'parent_name',
+        'createdTime', 'modifiedTime', 'size', 'file_path'
+    ]
+    
+    # Get all parent information
+    id_to_name = {item['id']: item['name'] for item in metadata if 'name' in item}
+    
+    with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for item in metadata:
+            parent_id = item.get('parents', [None])[0] if 'parents' in item else None
+            parent_name = id_to_name.get(parent_id, '')
+            
+            row = {
+                'id': item.get('id', ''),
+                'name': item.get('name', ''),
+                'mimeType': item.get('mimeType', ''),
+                'parent_id': parent_id,
+                'parent_name': parent_name,
+                'createdTime': item.get('createdTime', ''),
+                'modifiedTime': item.get('modifiedTime', ''),
+                'size': item.get('size', ''),
+                'file_path': item.get('file_path', '')
+            }
+            writer.writerow(row)
+    
+    logger.info(f"Metadata saved to {csv_path}")
+
+
 def download_hierarchy(file_ids, creds, base_path=None):
     hierarchy = []
+    all_metadata = []  # To store metadata for all files
 
     def download_hierarchy_from_drive(file_ids, parent_path=None):
         service = build("drive", "v3", credentials=creds)
         for file_id in file_ids:
-            metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,parents').execute()
+            metadata = service.files().get(
+                fileId=file_id, 
+                fields='id,name,mimeType,parents,createdTime,modifiedTime,size'
+            ).execute()
 
             file_path = None
             if parent_path:
@@ -256,6 +298,7 @@ def download_hierarchy(file_ids, creds, base_path=None):
                     downloaded_files = download_file(metadata['id'], creds, file_path.parent)
                     if downloaded_files:
                         metadata['file_path'] = next(iter(downloaded_files.values()))
+                        all_metadata.append(metadata)
             else:
                 # Create folder and process children
                 if file_path:
@@ -264,12 +307,15 @@ def download_hierarchy(file_ids, creds, base_path=None):
                 list_of_files = get_files_in_folder(metadata["id"], creds, file_path)
                 child_ids = [f[0]['id'] for f in list_of_files]
                 download_hierarchy_from_drive(child_ids, file_path)
+                
+                # Add folder to metadata
+                all_metadata.append(metadata)
 
             hierarchy.append(metadata)
     
     download_hierarchy_from_drive(file_ids, base_path)
 
-    return unique_list(hierarchy, key=lambda x: x['id'])
+    return unique_list(hierarchy, key=lambda x: x['id']), all_metadata
     
 def download(args):
     logger.debug(f"Downloading data...")
@@ -289,9 +335,12 @@ def download(args):
         client_secret=client_secret,
     )
 
-    flat_hierarchy = download_hierarchy(file_ids, creds, Path(output_path))
-    hierarchy = build_hierarchy(flat_hierarchy)
+    hierarchy, all_metadata = download_hierarchy(file_ids, creds, Path(output_path))
+    hierarchy = build_hierarchy(hierarchy)
     create_structure(hierarchy, output_path)
+    
+    # Save metadata to CSV
+    save_metadata_to_csv(all_metadata, output_path)
     
     logger.info(f"Data downloaded.")
 
