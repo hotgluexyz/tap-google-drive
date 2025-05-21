@@ -3,6 +3,8 @@ import os
 import json
 import argparse
 import logging
+import csv
+from datetime import datetime
 
 from pathlib import Path
 from io import StringIO
@@ -23,18 +25,24 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
+def unique_list(items, key=None):
+    seen = set()
+    result = []
+    for item in items:
+        val = key(item) if key else item
+        if val not in seen:
+            seen.add(val)
+            result.append(item)
+    return result
 
-def download_file(real_file_id, creds):
+
+def download_file(real_file_id, creds, target_path=None):
     """Downloads a file
     Args:
         real_file_id: ID of the file to download
-    Returns : IO object with location.
-
-    Load pre-authorized user credentials from the environment.
-    TODO(developer) - See https://developers.google.com/identity
-    for guides on implementing OAuth2 for the application.
+        target_path: Path to save the file to (including filename)
+    Returns : dict of {filename: filepath} for downloaded files
     """
-
     returned_files = {}
 
     try:
@@ -55,55 +63,74 @@ def download_file(real_file_id, creds):
                     service.files().list(q=f"'{file_id}' in parents").execute()
                 )
                 for file in files_in_folder["files"]:
-                    file, file_name = download_file_data(service, file["id"])
-                    returned_files[file_name] = file
+                    file_path = download_file_data(service, file["id"], target_path)
+                    if file_path:
+                        returned_files[file_path.name] = str(file_path)
 
         if returned_files == {}:
-            file, file_name = download_file_data(service, file_id)
-            returned_files[file_name] = file
+            file_path = download_file_data(service, file_id, target_path)
+            if file_path:
+                returned_files[file_path.name] = str(file_path)
 
     except HttpError as error:
         logger.exception(f"An error occurred: {error}")
-        file = None
 
     return returned_files
 
 
-def download_file_data(service, file_id):
+def download_file_data(service, file_id, target_path=None):
     try:
-        return download_file_d(service, file_id)
+        return download_file_d(service, file_id, target_path)
     except:
-        return export_file_d(service, file_id)
+        return export_file_d(service, file_id, target_path)
 
 
-def download_file_d(service, file_id):
-    file_name = service.files().get(fileId=file_id).execute()
-
+def download_file_d(service, file_id, target_path=None):
+    file_metadata = service.files().get(fileId=file_id, fields="id,name,mimeType,parents,createdTime,modifiedTime,size").execute()
+    file_name = file_metadata["name"]
+    
+    if target_path:
+        # Ensure the target directory exists
+        target_dir = Path(target_path).parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        file_path = Path(target_path) / file_name
+    else:
+        file_path = Path(file_name)
+    
     request = service.files().get_media(fileId=file_id)
 
-    file = io.BytesIO()
-    downloader = MediaIoBaseDownload(file, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-        logger.info(f'Downloading {file_name["name"]} {int(status.progress() * 100)}.')
+    with open(file_path, 'wb') as fh:
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+            logger.info(f'Downloading {file_name} {int(status.progress() * 100)}%')
+    
+    return file_path
 
-    return file.getvalue(), file_name["name"]
 
-
-def export_file_d(service, file_id):
-    file_name = service.files().get(fileId=file_id).execute()
+def export_file_d(service, file_id, target_path=None):
+    file_metadata = service.files().get(fileId=file_id, fields="id,name,mimeType,parents,createdTime,modifiedTime").execute()
+    file_name = file_metadata["name"] + ".pdf"
+    
+    if target_path:
+        # Ensure the target directory exists
+        target_dir = Path(target_path).parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        file_path = Path(target_path) / file_name
+    else:
+        file_path = Path(file_name)
 
     request = service.files().export_media(fileId=file_id, mimeType="application/pdf")
 
-    file = io.BytesIO()
-    downloader = MediaIoBaseDownload(file, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-        logger.info(f'Downloading {file_name["name"]} {int(status.progress() * 100)}.')
-
-    return file.getvalue(), file_name["name"] + ".pdf"
+    with open(file_path, 'wb') as fh:
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+            logger.info(f'Downloading {file_name} {int(status.progress() * 100)}%')
+    
+    return file_path
 
 
 def load_json(path):
@@ -112,22 +139,10 @@ def load_json(path):
 
 
 def parse_args():
-    """Parse standard command-line args.
-    Parses the command-line arguments mentioned in the SPEC and the
-    BEST_PRACTICES documents:
-    -c,--config     Config file
-    -s,--state      State file
-    -d,--discover   Run in discover mode
-    -p,--properties Properties file: DEPRECATED, please use --catalog instead
-    --catalog       Catalog file
-    Returns the parsed args object from argparse. For each argument that
-    point to JSON files (config, state, properties), we will automatically
-    load and parse the JSON file.
-    """
+    """Parse standard command-line args."""
     parser = argparse.ArgumentParser()
 
     parser.add_argument("-c", "--config", help="Config file", required=True)
-
     parser.add_argument("-s", "--state", help="State file", required=False)
 
     args = parser.parse_args()
@@ -150,7 +165,158 @@ def calculate_md5(file_path):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+def build_hierarchy(items):
+    item_map = {}
+    root_items = []
+    
+    # First pass: create a map of all items
+    for item in items:
+        item_map[item['id']] = {
+            **item,
+            'children': []
+        }
+    
+    # Second pass: assign children to parents
+    for item in items:
+        parent_id = item['parents'][0] if item['parents'] else None
+        
+        if parent_id in item_map:
+            item_map[parent_id]['children'].append(item_map[item['id']])
+        elif parent_id:
+            root_items.append(item_map[item['id']])
+        else:
+            root_items.append(item_map[item['id']])
+    
+    return root_items
 
+def create_structure(data, target_dir):
+    """
+    Recursively create directory structure from hierarchical data
+    
+    Args:
+        data: The hierarchical data structure
+        target_dir: The root directory where to create the structure
+    """
+    Path(target_dir).mkdir(parents=True, exist_ok=True)
+    
+    for item in data:
+        current_path = os.path.join(target_dir, item['name'])
+        
+        if item['mimeType'] == 'application/vnd.google-apps.folder':
+            os.makedirs(current_path, exist_ok=True)
+            print(f"Created directory: {current_path}")
+            
+            if item['children']:
+                create_structure(item['children'], current_path)
+        else:
+            # For files, we've already downloaded them during hierarchy building
+            # so we just need to move them to the correct location
+            if 'file_path' in item:
+                target_path = Path(current_path)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                Path(item['file_path']).rename(target_path)
+                print(f"Moved file to: {current_path}")
+
+def get_files_in_folder(folder_id, creds, parent_path=None):
+    files = []
+    page_token = None
+    service = build("drive", "v3", credentials=creds)
+    while True:
+        response = service.files().list(
+            q=f"'{folder_id}' in parents and trashed = false",
+            spaces='drive',
+            fields='nextPageToken, files(id, name, mimeType, parents, createdTime, modifiedTime, size)',
+            pageToken=page_token
+        ).execute()
+        for file in response.get('files', []):
+            if parent_path:
+                file_path = parent_path / file['name']
+            else:
+                file_path = None
+            files.append((file, file_path))
+        page_token = response.get('nextPageToken', None)
+        if page_token is None:
+            break
+    return files
+
+
+def save_metadata_to_csv(metadata, output_dir):
+    """Save file metadata to a CSV file"""
+    csv_path = Path(output_dir) / "google_drive_metadata.csv"
+    fieldnames = [
+        'id', 'name', 'mimeType', 'parent_id', 'parent_name',
+        'createdTime', 'modifiedTime', 'size', 'file_path'
+    ]
+    
+    # Get all parent information
+    id_to_name = {item['id']: item['name'] for item in metadata if 'name' in item}
+    
+    with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for item in metadata:
+            parent_id = item.get('parents', [None])[0] if 'parents' in item else None
+            parent_name = id_to_name.get(parent_id, '')
+            
+            row = {
+                'id': item.get('id', ''),
+                'name': item.get('name', ''),
+                'mimeType': item.get('mimeType', ''),
+                'parent_id': parent_id,
+                'parent_name': parent_name,
+                'createdTime': item.get('createdTime', ''),
+                'modifiedTime': item.get('modifiedTime', ''),
+                'size': item.get('size', ''),
+                'file_path': item.get('file_path', '')
+            }
+            writer.writerow(row)
+    
+    logger.info(f"Metadata saved to {csv_path}")
+
+
+def download_hierarchy(file_ids, creds, base_path=None):
+    hierarchy = []
+    all_metadata = []  # To store metadata for all files
+
+    def download_hierarchy_from_drive(file_ids, parent_path=None):
+        service = build("drive", "v3", credentials=creds)
+        for file_id in file_ids:
+            metadata = service.files().get(
+                fileId=file_id, 
+                fields='id,name,mimeType,parents,createdTime,modifiedTime,size'
+            ).execute()
+
+            file_path = None
+            if parent_path:
+                file_path = parent_path / metadata['name']
+
+            if metadata['mimeType'] != "application/vnd.google-apps.folder":
+                # Download file directly to disk
+                if file_path:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    downloaded_files = download_file(metadata['id'], creds, file_path.parent)
+                    if downloaded_files:
+                        metadata['file_path'] = next(iter(downloaded_files.values()))
+                        all_metadata.append(metadata)
+            else:
+                # Create folder and process children
+                if file_path:
+                    file_path.mkdir(parents=True, exist_ok=True)
+                
+                list_of_files = get_files_in_folder(metadata["id"], creds, file_path)
+                child_ids = [f[0]['id'] for f in list_of_files]
+                download_hierarchy_from_drive(child_ids, file_path)
+                
+                # Add folder to metadata
+                all_metadata.append(metadata)
+
+            hierarchy.append(metadata)
+    
+    download_hierarchy_from_drive(file_ids, base_path)
+
+    return unique_list(hierarchy, key=lambda x: x['id']), all_metadata
+    
 def download(args):
     logger.debug(f"Downloading data...")
     config = args.config
@@ -158,7 +324,6 @@ def download(args):
     refresh_token = config["refresh_token"]
     client_id = config["client_id"]
     client_secret = config["client_secret"]
-
     file_ids = [f.get("id") for f in config.get("files")]
     output_path = config["target_dir"]
 
@@ -170,29 +335,18 @@ def download(args):
         client_secret=client_secret,
     )
 
-    for file_id in file_ids:
-        files = download_file(file_id, creds)
-        file_name = None
-
-        for k, v in files.items():
-            if output_path:
-                if output_path[-1] != "/":
-                    output_path = output_path + "/"
-                file_name = Path(output_path + k)
-
-            with open(file_name or k, "wb") as f:
-                f.write(v)
-
+    hierarchy, all_metadata = download_hierarchy(file_ids, creds, Path(output_path))
+    hierarchy = build_hierarchy(hierarchy)
+    create_structure(hierarchy, output_path)
+    
+    # Save metadata to CSV
+    save_metadata_to_csv(all_metadata, output_path)
+    
     logger.info(f"Data downloaded.")
 
-
 def main():
-    # Parse command line arguments
     args = parse_args()
-
-    # Download the data
     download(args)
-
 
 if __name__ == "__main__":
     main()
