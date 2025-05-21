@@ -23,6 +23,16 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
+def unique_list(items, key=None):
+    seen = set()
+    result = []
+    for item in items:
+        val = key(item) if key else item
+        if val not in seen:
+            seen.add(val)
+            result.append(item)
+    return result
+
 
 def download_file(real_file_id, creds):
     """Downloads a file
@@ -150,7 +160,103 @@ def calculate_md5(file_path):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+def build_hierarchy(items):
+    item_map = {}
+    root_items = []
+    
+    # First pass: create a map of all items
+    for item in items:
+        item_map[item['id']] = {
+            **item,
+            'children': []
+        }
+    
+    # Second pass: assign children to parents
+    for item in items:
+        parent_id = item['parents'][0] if item['parents'] else None
+        
+        if parent_id in item_map:
+            # Parent exists in our data - add as child
+            item_map[parent_id]['children'].append(item_map[item['id']])
+        elif parent_id:
+            # Parent doesn't exist in our data - treat as root item
+            root_items.append(item_map[item['id']])
+        else:
+            # No parent specified - add to root items
+            root_items.append(item_map[item['id']])
+    
+    return root_items
 
+def create_structure(data, target_dir):
+    """
+    Recursively create directory structure from hierarchical data
+    
+    Args:
+        data: The hierarchical data structure
+        target_dir: The root directory where to create the structure
+    """
+    # Create target directory if it doesn't exist
+    Path(target_dir).mkdir(parents=True, exist_ok=True)
+    
+    for item in data:
+        current_path = os.path.join(target_dir, item['name'])
+        
+        if item['mimeType'] == 'application/vnd.google-apps.folder':
+            # Create directory
+            os.makedirs(current_path, exist_ok=True)
+            print(f"Created directory: {current_path}")
+            
+            # Process children recursively
+            if item['children']:
+                create_structure(item['children'], current_path)
+        else:
+            for v in item['file'].values():
+                file_name = Path(current_path)
+
+                with open(file_name, "wb") as f:
+                    f.write(v)
+            
+            print(f"Created file: {current_path}")
+
+def get_files_in_folder(folder_id, creds):
+    files = []
+    page_token = None
+    service = build("drive", "v3", credentials=creds)
+    while True:
+        response = service.files().list(
+            q=f"'{folder_id}' in parents and trashed = false",
+            spaces='drive',
+            fields='nextPageToken, files(id, name, mimeType)',
+            pageToken=page_token
+        ).execute()
+        files.extend(response.get('files', []))
+        page_token = response.get('nextPageToken', None)
+        if page_token is None:
+            break
+    return files
+
+
+def download_hierarchy(file_ids, creds):
+    hierarchy = []
+
+    def download_hierarchy_from_drive(file_ids):
+        service = build("drive", "v3", credentials=creds)
+        for file_id in file_ids:
+            metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,parents').execute()
+
+            if metadata['mimeType'] != "application/vnd.google-apps.folder":
+                files = download_file(file_id, creds)
+                metadata['file'] = files
+            else:
+                list_of_files = get_files_in_folder(metadata["id"], creds)
+                download_hierarchy_from_drive((f.get("id") for f in list_of_files))
+
+            hierarchy.append(metadata)
+    
+    download_hierarchy_from_drive(file_ids)
+
+    return unique_list(hierarchy, key=lambda x: x['id'])
+    
 def download(args):
     logger.debug(f"Downloading data...")
     config = args.config
@@ -158,7 +264,6 @@ def download(args):
     refresh_token = config["refresh_token"]
     client_id = config["client_id"]
     client_secret = config["client_secret"]
-
     file_ids = [f.get("id") for f in config.get("files")]
     output_path = config["target_dir"]
 
@@ -170,21 +275,10 @@ def download(args):
         client_secret=client_secret,
     )
 
-    for file_id in file_ids:
-        files = download_file(file_id, creds)
-        file_name = None
-
-        for k, v in files.items():
-            if output_path:
-                if output_path[-1] != "/":
-                    output_path = output_path + "/"
-                file_name = Path(output_path + k)
-
-            with open(file_name or k, "wb") as f:
-                f.write(v)
-
+    hierarchy = download_hierarchy(file_ids, creds)
+    hierarchy = build_hierarchy(hierarchy)
+    create_structure(hierarchy, output_path)
     logger.info(f"Data downloaded.")
-
 
 def main():
     # Parse command line arguments
