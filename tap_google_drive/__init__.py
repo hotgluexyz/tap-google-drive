@@ -24,7 +24,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 
-def download_file(real_file_id, creds):
+def download_file(real_file_id, creds, config_file_name=None):
     """Downloads a file
     Args:
         real_file_id: ID of the file to download
@@ -59,7 +59,7 @@ def download_file(real_file_id, creds):
                     returned_files[file_name] = file
 
         if returned_files == {}:
-            file, file_name = download_file_data(service, file_id)
+            file, file_name = download_file_data(service, file_id, config_file_name)
             returned_files[file_name] = file
 
     except HttpError as error:
@@ -69,15 +69,21 @@ def download_file(real_file_id, creds):
     return returned_files
 
 
-def download_file_data(service, file_id):
+def download_file_data(service, file_id, config_file_name=None):
     try:
-        return download_file_d(service, file_id)
-    except:
+        return download_file_d(service, file_id, config_file_name)
+    except Exception as e:
         return export_file_d(service, file_id)
 
 
-def download_file_d(service, file_id):
-    file_name = service.files().get(fileId=file_id).execute()
+def download_file_d(service, file_id, config_file_name):
+    # Try to get metadata, but if it fails, use file_id as fallback name
+    try:
+        file_metadata = service.files().get(fileId=file_id).execute()
+        file_name = file_metadata["name"]
+    except Exception as e:
+        logger.warning(f"Could not fetch metadata for {file_id}: {e}. Using config file name as name.")
+        file_name = config_file_name
 
     request = service.files().get_media(fileId=file_id)
 
@@ -86,24 +92,56 @@ def download_file_d(service, file_id):
     done = False
     while done is False:
         status, done = downloader.next_chunk()
-        logger.info(f'Downloading {file_name["name"]} {int(status.progress() * 100)}.')
+        logger.info(f'Downloading {file_name} {int(status.progress() * 100)}.')
 
-    return file.getvalue(), file_name["name"]
+    return file.getvalue(), file_name
 
 
 def export_file_d(service, file_id):
-    file_name = service.files().get(fileId=file_id).execute()
+    file_metadata = service.files().get(fileId=file_id).execute()
+    file_name = file_metadata["name"]
+    mime_type = file_metadata.get("mimeType", "")
 
-    request = service.files().export_media(fileId=file_id, mimeType="application/pdf")
+    # Map Google Workspace mimeTypes to export formats
+    mime_type_map = {
+        "application/vnd.google-apps.spreadsheet": {
+            "export_mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "extension": ".xlsx"
+        },
+        "application/vnd.google-apps.document": {
+            "export_mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "extension": ".docx"
+        },
+        "application/vnd.google-apps.presentation": {
+            "export_mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "extension": ".pptx"
+        },
+        "application/vnd.google-apps.drawing": {
+            "export_mime": "application/pdf",
+            "extension": ".pdf"
+        },
+        "application/vnd.google-apps.form": {
+            "export_mime": "application/pdf",
+            "extension": ".pdf"
+        }
+    }
+
+    # Get the appropriate export format or default to PDF
+    export_config = mime_type_map.get(mime_type, {
+        "export_mime": "application/pdf",
+        "extension": ".pdf"
+    })
+
+    request = service.files().export_media(fileId=file_id, mimeType=export_config["export_mime"])
 
     file = io.BytesIO()
     downloader = MediaIoBaseDownload(file, request)
     done = False
     while done is False:
         status, done = downloader.next_chunk()
-        logger.info(f'Downloading {file_name["name"]} {int(status.progress() * 100)}.')
+        logger.info(f'Downloading {file_name} {int(status.progress() * 100)}.')
 
-    return file.getvalue(), file_name["name"] + ".pdf"
+    return file.getvalue(), file_name + export_config["extension"]
 
 
 def load_json(path):
@@ -159,7 +197,7 @@ def download(args):
     client_id = config["client_id"]
     client_secret = config["client_secret"]
 
-    file_ids = [f.get("id") for f in config.get("files")]
+    files = config.get("files")
     output_path = config["target_dir"]
 
     creds = Credentials(
@@ -170,8 +208,10 @@ def download(args):
         client_secret=client_secret,
     )
 
-    for file_id in file_ids:
-        files = download_file(file_id, creds)
+    for file in files:
+        file_id = file.get("id")
+        file_name = file.get("name")
+        files = download_file(file_id, creds, file_name)
         file_name = None
 
         for k, v in files.items():
