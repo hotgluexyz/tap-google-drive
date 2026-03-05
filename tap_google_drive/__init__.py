@@ -1,39 +1,44 @@
 #!/usr/bin/env python3
-import os
+import io
 import json
 import argparse
+import hashlib
 import logging
 
 from pathlib import Path
-from io import StringIO
-import hashlib
 
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 
+from hotglue_etl_exceptions import InvalidCredentialsError
+from hotglue_singer_sdk import Tap
+
+from tap_google_drive.auth import GoogleOAuthAuthenticator
 
 logger = logging.getLogger("tap-google-drive")
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
-import io
+TOKEN_URI = "https://oauth2.googleapis.com/token"
 
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload
+
+class GoogleDriveTap(Tap):
+    name = "tap-google-drive"
+    config_jsonschema = {}
+
+    def discover_streams(self):
+        return []
+
+    @classmethod
+    def access_token_support(cls, connector=None):
+        return (GoogleOAuthAuthenticator, TOKEN_URI)
 
 
 def download_file(real_file_id, creds, config_file_name=None):
-    """Downloads a file
-    Args:
-        real_file_id: ID of the file to download
-    Returns : IO object with location.
-
-    Load pre-authorized user credentials from the environment.
-    TODO(developer) - See https://developers.google.com/identity
-    for guides on implementing OAuth2 for the application.
-    """
 
     returned_files = {}
 
@@ -63,8 +68,16 @@ def download_file(real_file_id, creds, config_file_name=None):
             returned_files[file_name] = file
 
     except HttpError as error:
+        if error.resp.status in (401, 403):
+            raise InvalidCredentialsError(
+                f"Invalid or expired credentials: {error}"
+            ) from error
         logger.exception(f"An error occurred: {error}")
-        file = None
+        return {}
+    except RefreshError as error:
+        raise InvalidCredentialsError(
+            f"Failed to refresh Google OAuth token: {error}"
+        ) from error
 
     return returned_files
 
@@ -72,7 +85,7 @@ def download_file(real_file_id, creds, config_file_name=None):
 def download_file_data(service, file_id, config_file_name=None):
     try:
         return download_file_d(service, file_id, config_file_name)
-    except Exception as e:
+    except Exception:
         return export_file_d(service, file_id)
 
 
@@ -150,23 +163,14 @@ def load_json(path):
 
 
 def parse_args():
-    """Parse standard command-line args.
-    Parses the command-line arguments mentioned in the SPEC and the
-    BEST_PRACTICES documents:
-    -c,--config     Config file
-    -s,--state      State file
-    -d,--discover   Run in discover mode
-    -p,--properties Properties file: DEPRECATED, please use --catalog instead
-    --catalog       Catalog file
-    Returns the parsed args object from argparse. For each argument that
-    point to JSON files (config, state, properties), we will automatically
-    load and parse the JSON file.
-    """
     parser = argparse.ArgumentParser()
-
     parser.add_argument("-c", "--config", help="Config file", required=True)
-
     parser.add_argument("-s", "--state", help="State file", required=False)
+    parser.add_argument(
+        "--access-token",
+        action="store_true",
+        help="Refresh the OAuth access token and update the config file.",
+    )
 
     args = parser.parse_args()
     if args.config:
@@ -190,7 +194,7 @@ def calculate_md5(file_path):
 
 
 def download(args):
-    logger.debug(f"Downloading data...")
+    logger.debug("Downloading data...")
     config = args.config
     access_token = config.get("access_token")
     refresh_token = config["refresh_token"]
@@ -201,9 +205,9 @@ def download(args):
     output_path = config["target_dir"]
 
     creds = Credentials(
-        access_token or "",
+        access_token or None,
         refresh_token=refresh_token,
-        token_uri="https://oauth2.googleapis.com/token",
+        token_uri=TOKEN_URI,
         client_id=client_id,
         client_secret=client_secret,
     )
@@ -223,15 +227,18 @@ def download(args):
             with open(file_name or k, "wb") as f:
                 f.write(v)
 
-    logger.info(f"Data downloaded.")
+    logger.info("Data downloaded.")
 
 
 def main():
     # Parse command line arguments
     args = parse_args()
 
-    # Download the data
-    download(args)
+    if args.access_token:
+        tap = GoogleDriveTap(config=[Path(args.config_path)], validate_config=False)
+        GoogleDriveTap.fetch_access_token(connector=tap)
+    else:
+        download(args)
 
 
 if __name__ == "__main__":

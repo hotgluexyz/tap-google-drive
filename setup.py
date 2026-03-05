@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name='tap-google-drive',
-    version='0.0.1',
+    version='0.0.2',
     description='hotglue tap for importing files from Google Drive',
     author='hotglue',
     url='https://hotglue.xyz',
@@ -14,7 +14,9 @@ setup(
         'argparse==1.4.0',
         'google-api-python-client',
         'google-auth-httplib2',
-        'google-auth-oauthlib'
+        'google-auth-oauthlib',
+        'hotglue-singer-sdk',
+        'hotglue-etl-exceptions'
     ],
     entry_points='''
         [console_scripts]
