@@ -9,8 +9,6 @@ from hotglue_etl_exceptions import InvalidCredentialsError
 
 logger = logging.getLogger("tap-google-drive")
 
-TOKEN_URI = "https://oauth2.googleapis.com/token"
-
 
 class GoogleOAuthAuthenticator:
     def __init__(self, stream, config_file: str, auth_endpoint: str):
@@ -28,7 +26,7 @@ class GoogleOAuthAuthenticator:
             creds = Credentials(
                 token=config.get("access_token", ""),
                 refresh_token=config["refresh_token"],
-                token_uri=TOKEN_URI,
+                token_uri=self._auth_endpoint,
                 client_id=config["client_id"],
                 client_secret=config["client_secret"],
             )
