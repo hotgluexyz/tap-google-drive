@@ -1,7 +1,6 @@
 """Google Drive API client and file download utilities."""
 
 import io
-import hashlib
 import logging
 
 from pathlib import Path
@@ -83,7 +82,6 @@ def download_file(real_file_id, creds, config_file_name=None):
 
     try:
         service = build("drive", "v3", credentials=creds)
-        file_id = real_file_id
 
         folders = (
             service.files()
@@ -92,16 +90,16 @@ def download_file(real_file_id, creds, config_file_name=None):
         )
 
         for folder in folders["files"]:
-            if folder["id"] == file_id:
+            if folder["id"] == real_file_id:
                 files_in_folder = (
-                    service.files().list(q=f"'{file_id}' in parents").execute()
+                    service.files().list(q=f"'{real_file_id}' in parents").execute()
                 )
                 for file in files_in_folder["files"]:
                     file, file_name = download_file_data(service, file["id"])
                     returned_files[file_name] = file
 
         if returned_files == {}:
-            file, file_name = download_file_data(service, file_id, config_file_name)
+            file, file_name = download_file_data(service, real_file_id, config_file_name)
             returned_files[file_name] = file
 
     except HttpError as error:
@@ -166,12 +164,3 @@ def _export_workspace_file(service, file_id):
         logger.info(f'Downloading {file_name} {int(status.progress() * 100)}.')
 
     return file.getvalue(), file_name + export_config["extension"]
-
-
-def calculate_md5(file_path):
-    """Calculate the MD5 hash of a file."""
-    hash_md5 = hashlib.md5()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()

@@ -6,9 +6,7 @@ from hotglue_singer_sdk import Stream, Tap
 from hotglue_singer_sdk import typing as th
 
 from tap_google_drive.auth import GoogleOAuthAuthenticator
-from tap_google_drive.client import download
-
-TOKEN_URI = "https://oauth2.googleapis.com/token"
+from tap_google_drive.client import TOKEN_URI, download
 
 
 class GoogleDriveTap(Tap):
