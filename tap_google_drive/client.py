@@ -62,10 +62,10 @@ def download(config):
     for file in files:
         file_id = file.get("id")
         file_name = file.get("name")
-        files = download_file(file_id, creds, file_name)
+        downloaded_files = download_file(file_id, creds, file_name)
         file_name = None
 
-        for k, v in files.items():
+        for k, v in downloaded_files.items():
             if output_path:
                 if output_path[-1] != "/":
                     output_path = output_path + "/"
@@ -78,30 +78,9 @@ def download(config):
 
 
 def download_file(real_file_id, creds, config_file_name=None):
-    returned_files = {}
-
     try:
         service = build("drive", "v3", credentials=creds)
-
-        folders = (
-            service.files()
-            .list(q="mimeType='application/vnd.google-apps.folder'")
-            .execute()
-        )
-
-        for folder in folders["files"]:
-            if folder["id"] == real_file_id:
-                files_in_folder = (
-                    service.files().list(q=f"'{real_file_id}' in parents").execute()
-                )
-                for file in files_in_folder["files"]:
-                    file, file_name = download_file_data(service, file["id"])
-                    returned_files[file_name] = file
-
-        if returned_files == {}:
-            file, file_name = download_file_data(service, real_file_id, config_file_name)
-            returned_files[file_name] = file
-
+        return _resolve_and_download(service, real_file_id, config_file_name)
     except HttpError as error:
         if error.resp.status in (401, 403):
             raise InvalidCredentialsError(
@@ -114,7 +93,30 @@ def download_file(real_file_id, creds, config_file_name=None):
             f"Failed to refresh Google OAuth token: {error}"
         ) from error
 
-    return returned_files
+
+def _resolve_and_download(service, file_id, config_file_name=None):
+    """Detect whether file_id is a folder and download accordingly."""
+    folders = (
+        service.files()
+        .list(q="mimeType='application/vnd.google-apps.folder'")
+        .execute()
+    )
+
+    for folder in folders["files"]:
+        if folder["id"] == file_id:
+            return _download_folder_contents(service, file_id)
+
+    file, file_name = download_file_data(service, file_id, config_file_name)
+    return {file_name: file}
+
+
+def _download_folder_contents(service, folder_id):
+    files_in_folder = service.files().list(q=f"'{folder_id}' in parents").execute()
+    result = {}
+    for file in files_in_folder["files"]:
+        data, file_name = download_file_data(service, file["id"])
+        result[file_name] = data
+    return result
 
 
 def download_file_data(service, file_id, config_file_name=None):
