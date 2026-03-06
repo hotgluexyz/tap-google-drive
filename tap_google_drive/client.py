@@ -6,16 +6,15 @@ import logging
 from pathlib import Path
 
 from google.auth.exceptions import RefreshError
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 from hotglue_etl_exceptions import InvalidCredentialsError
 
-logger = logging.getLogger("tap-google-drive")
+from tap_google_drive.auth import build_credentials
 
-TOKEN_URI = "https://oauth2.googleapis.com/token"
+logger = logging.getLogger("tap-google-drive")
 
 WORKSPACE_MIME_TYPE_MAP = {
     "application/vnd.google-apps.spreadsheet": {
@@ -43,21 +42,10 @@ WORKSPACE_MIME_TYPE_MAP = {
 
 def download(config):
     logger.debug("Downloading data...")
-    access_token = config.get("access_token")
-    refresh_token = config["refresh_token"]
-    client_id = config["client_id"]
-    client_secret = config["client_secret"]
-
     files = config.get("files")
     output_path = config["target_dir"]
 
-    creds = Credentials(
-        access_token or None,
-        refresh_token=refresh_token,
-        token_uri=TOKEN_URI,
-        client_id=client_id,
-        client_secret=client_secret,
-    )
+    creds = build_credentials(config)
 
     for file in files:
         file_id = file.get("id")
@@ -126,6 +114,17 @@ def download_file_data(service, file_id, config_file_name=None):
         return _export_workspace_file(service, file_id)
 
 
+def _stream_download(request, file_name):
+    """Execute a MediaIoBaseDownload request and return the raw bytes."""
+    file = io.BytesIO()
+    downloader = MediaIoBaseDownload(file, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+        logger.info(f"Downloading {file_name} {int(status.progress() * 100)}.")
+    return file.getvalue()
+
+
 def _download_binary(service, file_id, config_file_name):
     try:
         file_metadata = service.files().get(fileId=file_id).execute()
@@ -135,15 +134,7 @@ def _download_binary(service, file_id, config_file_name):
         file_name = config_file_name
 
     request = service.files().get_media(fileId=file_id)
-
-    file = io.BytesIO()
-    downloader = MediaIoBaseDownload(file, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-        logger.info(f'Downloading {file_name} {int(status.progress() * 100)}.')
-
-    return file.getvalue(), file_name
+    return _stream_download(request, file_name), file_name
 
 
 def _export_workspace_file(service, file_id):
@@ -157,12 +148,4 @@ def _export_workspace_file(service, file_id):
     })
 
     request = service.files().export_media(fileId=file_id, mimeType=export_config["export_mime"])
-
-    file = io.BytesIO()
-    downloader = MediaIoBaseDownload(file, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-        logger.info(f'Downloading {file_name} {int(status.progress() * 100)}.')
-
-    return file.getvalue(), file_name + export_config["extension"]
+    return _stream_download(request, file_name), file_name + export_config["extension"]

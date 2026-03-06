@@ -5,8 +5,8 @@ from typing import List
 from hotglue_singer_sdk import Stream, Tap
 from hotglue_singer_sdk import typing as th
 
-from tap_google_drive.auth import GoogleOAuthAuthenticator
-from tap_google_drive.client import TOKEN_URI, download
+from tap_google_drive.auth import GoogleOAuthAuthenticator, TOKEN_URI
+from tap_google_drive.client import download
 
 
 class GoogleDriveTap(Tap):

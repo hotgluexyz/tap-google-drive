@@ -6,6 +6,18 @@ from google.oauth2.credentials import Credentials
 
 from hotglue_etl_exceptions import InvalidCredentialsError
 
+TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+def build_credentials(config, token_uri=TOKEN_URI):
+    return Credentials(
+        token=config.get("access_token") or None,
+        refresh_token=config["refresh_token"],
+        token_uri=token_uri,
+        client_id=config["client_id"],
+        client_secret=config["client_secret"],
+    )
+
 
 class GoogleOAuthAuthenticator:
     def __init__(self, stream, config_file: str, auth_endpoint: str):
@@ -19,13 +31,7 @@ class GoogleOAuthAuthenticator:
     def update_access_token(self) -> None:
         config = self._stream.config
         try:
-            creds = Credentials(
-                token=config.get("access_token", ""),
-                refresh_token=config["refresh_token"],
-                token_uri=self._auth_endpoint,
-                client_id=config["client_id"],
-                client_secret=config["client_secret"],
-            )
+            creds = build_credentials(config, token_uri=self._auth_endpoint)
             creds.refresh(Request())
         except RefreshError as e:
             raise InvalidCredentialsError(
