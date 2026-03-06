@@ -1,0 +1,177 @@
+"""Google Drive API client and file download utilities."""
+
+import io
+import hashlib
+import logging
+
+from pathlib import Path
+
+from google.auth.exceptions import RefreshError
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
+
+from hotglue_etl_exceptions import InvalidCredentialsError
+
+logger = logging.getLogger("tap-google-drive")
+
+TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+WORKSPACE_MIME_TYPE_MAP = {
+    "application/vnd.google-apps.spreadsheet": {
+        "export_mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "extension": ".xlsx",
+    },
+    "application/vnd.google-apps.document": {
+        "export_mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "extension": ".docx",
+    },
+    "application/vnd.google-apps.presentation": {
+        "export_mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "extension": ".pptx",
+    },
+    "application/vnd.google-apps.drawing": {
+        "export_mime": "application/pdf",
+        "extension": ".pdf",
+    },
+    "application/vnd.google-apps.form": {
+        "export_mime": "application/pdf",
+        "extension": ".pdf",
+    },
+}
+
+
+def download(config):
+    logger.debug("Downloading data...")
+    access_token = config.get("access_token")
+    refresh_token = config["refresh_token"]
+    client_id = config["client_id"]
+    client_secret = config["client_secret"]
+
+    files = config.get("files")
+    output_path = config["target_dir"]
+
+    creds = Credentials(
+        access_token or None,
+        refresh_token=refresh_token,
+        token_uri=TOKEN_URI,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+
+    for file in files:
+        file_id = file.get("id")
+        file_name = file.get("name")
+        files = download_file(file_id, creds, file_name)
+        file_name = None
+
+        for k, v in files.items():
+            if output_path:
+                if output_path[-1] != "/":
+                    output_path = output_path + "/"
+                file_name = Path(output_path + k)
+
+            with open(file_name or k, "wb") as f:
+                f.write(v)
+
+    logger.info("Data downloaded.")
+
+
+def download_file(real_file_id, creds, config_file_name=None):
+    returned_files = {}
+
+    try:
+        service = build("drive", "v3", credentials=creds)
+        file_id = real_file_id
+
+        folders = (
+            service.files()
+            .list(q="mimeType='application/vnd.google-apps.folder'")
+            .execute()
+        )
+
+        for folder in folders["files"]:
+            if folder["id"] == file_id:
+                files_in_folder = (
+                    service.files().list(q=f"'{file_id}' in parents").execute()
+                )
+                for file in files_in_folder["files"]:
+                    file, file_name = download_file_data(service, file["id"])
+                    returned_files[file_name] = file
+
+        if returned_files == {}:
+            file, file_name = download_file_data(service, file_id, config_file_name)
+            returned_files[file_name] = file
+
+    except HttpError as error:
+        if error.resp.status in (401, 403):
+            raise InvalidCredentialsError(
+                f"Invalid or expired credentials: {error}"
+            ) from error
+        logger.exception(f"An error occurred: {error}")
+        return {}
+    except RefreshError as error:
+        raise InvalidCredentialsError(
+            f"Failed to refresh Google OAuth token: {error}"
+        ) from error
+
+    return returned_files
+
+
+def download_file_data(service, file_id, config_file_name=None):
+    try:
+        return _download_binary(service, file_id, config_file_name)
+    except Exception:
+        return _export_workspace_file(service, file_id)
+
+
+def _download_binary(service, file_id, config_file_name):
+    try:
+        file_metadata = service.files().get(fileId=file_id).execute()
+        file_name = file_metadata["name"]
+    except Exception as e:
+        logger.warning(f"Could not fetch metadata for {file_id}: {e}. Using config file name as name.")
+        file_name = config_file_name
+
+    request = service.files().get_media(fileId=file_id)
+
+    file = io.BytesIO()
+    downloader = MediaIoBaseDownload(file, request)
+    done = False
+    while done is False:
+        status, done = downloader.next_chunk()
+        logger.info(f'Downloading {file_name} {int(status.progress() * 100)}.')
+
+    return file.getvalue(), file_name
+
+
+def _export_workspace_file(service, file_id):
+    file_metadata = service.files().get(fileId=file_id).execute()
+    file_name = file_metadata["name"]
+    mime_type = file_metadata.get("mimeType", "")
+
+    export_config = WORKSPACE_MIME_TYPE_MAP.get(mime_type, {
+        "export_mime": "application/pdf",
+        "extension": ".pdf",
+    })
+
+    request = service.files().export_media(fileId=file_id, mimeType=export_config["export_mime"])
+
+    file = io.BytesIO()
+    downloader = MediaIoBaseDownload(file, request)
+    done = False
+    while done is False:
+        status, done = downloader.next_chunk()
+        logger.info(f'Downloading {file_name} {int(status.progress() * 100)}.')
+
+    return file.getvalue(), file_name + export_config["extension"]
+
+
+def calculate_md5(file_path):
+    """Calculate the MD5 hash of a file."""
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()

@@ -11,7 +11,6 @@ setup(
     classifiers=['Programming Language :: Python :: 3 :: Only'],
     py_modules=['tap_google_drive'],
     install_requires=[
-        'argparse==1.4.0',
         'google-api-python-client',
         'google-auth-httplib2',
         'google-auth-oauthlib',
@@ -20,7 +19,7 @@ setup(
     ],
     entry_points='''
         [console_scripts]
-        tap-google-drive=tap_google_drive:main
+        tap-google-drive=tap_google_drive.tap:GoogleDriveTap.cli
     ''',
     packages=['tap_google_drive']
 )
