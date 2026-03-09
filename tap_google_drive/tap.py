@@ -60,7 +60,7 @@ class GoogleDriveTap(Tap):
     def discover_streams(self) -> List[Stream]:
         return []
 
-    def run(self, catalog=None, state=None):
+    def run_sync(self, catalog=None, state=None):
         download(self.config)
 
     @classmethod
