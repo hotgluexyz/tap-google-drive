@@ -52,7 +52,7 @@ class GoogleDriveTap(Tap):
         th.Property(
             "target_dir",
             th.StringType,
-            required=True,
+            required=False,
             description="Local directory path where downloaded files are saved.",
         ),
     ).to_dict()

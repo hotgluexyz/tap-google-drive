@@ -1,5 +1,6 @@
 import json
 
+from hotglue_singer_sdk.authenticators import OAuthAuthenticator
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
@@ -19,7 +20,7 @@ def build_credentials(config, token_uri=TOKEN_URI):
     )
 
 
-class GoogleOAuthAuthenticator:
+class GoogleOAuthAuthenticator(OAuthAuthenticator):
     def __init__(self, stream, config_file: str, auth_endpoint: str):
         self._stream = stream
         self._config_file = config_file
@@ -28,7 +29,7 @@ class GoogleOAuthAuthenticator:
     def is_token_valid(self) -> bool:
         return False
 
-    def update_access_token(self) -> None:
+    def update_access_token_locally(self) -> None:
         config = self._stream.config
         try:
             creds = build_credentials(config, token_uri=self._auth_endpoint)
